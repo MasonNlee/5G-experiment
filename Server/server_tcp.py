@@ -7,7 +7,8 @@ from pymongo import MongoClient
 client = MongoClient()
 production_env = True
 host = "0.0.0.0"
-port = 55880
+port_recv = 55880
+port_send = 55881
 
 Latitude = ""
 Longitude = ""
@@ -17,6 +18,20 @@ dataTemp = ""
 dataFlag = False
 
 isModule = False
+
+
+class SendBackThread (threading.Thread):
+    def __init__(self, socket_inst):
+        threading.Thread.__init__(self)
+        self.mySocket = socket_inst
+        self.mySocket.settimeout(120)
+
+    def send_msg(self, index_send, server_time_start, time_initial):
+        server_duration = time.time() - server_time_start
+        index_send = "index: " + index_send + "; server_process_time: "+ str(int(server_duration*1000) + "; client_time_start"+ time_initial)
+        self.mySocket.sendall(bytes(index_send, 'utf-8'))
+
+        # socket.write("") -> self.mySocket.sendall(bytes(message, 'utf-8'))
 
 class myThread (threading.Thread):
     def __init__(self, socketInstance, time):
@@ -37,6 +52,7 @@ class myThread (threading.Thread):
             
             try:
                 rawData = self.mySocket.recv(8192).decode()
+                server_time_start = time.time() # record start time
                 print("recv: " + rawData) if not production_env else None
 
                 From = rawData.replace(";",":").split(": ")
@@ -66,14 +82,16 @@ class myThread (threading.Thread):
                                     if (len(items) == 2 and items[1] != ""):
                                         if (items[0] == "Time"):
                                             timestr = dbData['Time'] = items[1]
+                                            time_initial = items[1]
                                             # print(timestr)
-                                            duration = time.time() - float(timestr)
+                                            # duration = time.time() - float(timestr)
                                             # print(duration * 1000)
-                                            dbData['sentDurationMs'] = duration * 1000
+                                            # dbData['sentDurationMs'] = duration * 1000
                                         if (items[0] == "CSQ"):
                                             dbData['CSQ'] = items[1]
                                         if (items[0] == "Index"):
                                             dbData['Index'] = items[1]
+                                            index_send = items[1]
                                         if (items[0] == "Height"):
                                             dbData['Height'] = items[1]
                                         if (items[0] == "Lati"):
@@ -130,8 +148,15 @@ class myThread (threading.Thread):
                 if rawData == "":
                     self.mySocket.shutdown(2)
                     self.mySocket.close()
+
                     # print("Connection Ended by Client\n")
                     # break
+                
+                # Start sending back data to Client(Phone)
+                newSend = SendBackThread(conn2)
+                newSend.send_msg(index_send, server_time_start, time_initial)
+                # Send ended
+
                 self.mySocket.sendall(bytes('finish', 'utf-8'))
             except Exception as err:
                 self.mySocket.shutdown(2)
@@ -139,19 +164,28 @@ class myThread (threading.Thread):
                 print(err)
                 break
 
-                
+#Initialize sending and receiving sockets
 tcps = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
 tcps.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 
-tcps.bind((host,port))
+tcps.bind((host,port_recv))
 
 tcps.listen(1)
+
+send_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+
+send_socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+
+send_socket.bind((host,port_send))
+
+send_socket.listen(1)
+#Initialized
 
 while True:
     print("Waiting for incoming connections\n")
     conn, addr = tcps.accept()
-
+    conn2, addr2 = send_socket.accept()
     dt = datetime.datetime.now()
     currentTime = dt.strftime('%m-%d %H:%M')
     
@@ -159,3 +193,5 @@ while True:
     newThread = myThread(conn, currentTime)
     newThread.start()
     
+    
+
